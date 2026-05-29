@@ -38,6 +38,8 @@ enum DataKey {
     FeeTiers,
     /// Security registry address (optional).
     SecurityRegistry,
+    /// Transaction-scoped lock for flash-loan callbacks.
+    ReentrancyLock,
 }
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -202,6 +204,7 @@ impl FlashLoanProvider {
     ///
     /// The entire transaction reverts if repayment is insufficient.
     pub fn flash_loan(env: Env, receiver: Address, token: Address, amount: i128) {
+        Self::acquire_reentrancy_lock(&env);
         assert!(amount > 0, "amount must be positive");
 
         let fee = Self::_calculate_fee(&env, amount);
@@ -228,6 +231,7 @@ impl FlashLoanProvider {
 
         env.events()
             .publish((symbol_short!("flash_ln"),), (receiver, token, amount, fee));
+        Self::release_reentrancy_lock(&env);
     }
 
     // ── Batch flash loan ──────────────────────────────────────────────────────
@@ -241,6 +245,7 @@ impl FlashLoanProvider {
     /// * `receiver` – contract implementing `FlashLoanBatchReceiver`.
     /// * `loans`    – vec of `(token_address, amount)` pairs.
     pub fn flash_loan_batch(env: Env, receiver: Address, loans: Vec<(Address, i128)>) {
+        Self::acquire_reentrancy_lock(&env);
         if loans.is_empty() {
             panic!("cannot flash loan zero assets");
         }
@@ -293,6 +298,20 @@ impl FlashLoanProvider {
 
         env.events()
             .publish((symbol_short!("fl_batch"), receiver), loan_details);
+        Self::release_reentrancy_lock(&env);
+    }
+
+    fn acquire_reentrancy_lock(env: &Env) {
+        if env.storage().temporary().has(&DataKey::ReentrancyLock) {
+            panic!("reentrant flash loan");
+        }
+        env.storage()
+            .temporary()
+            .set(&DataKey::ReentrancyLock, &true);
+    }
+
+    fn release_reentrancy_lock(env: &Env) {
+        env.storage().temporary().remove(&DataKey::ReentrancyLock);
     }
 }
 

@@ -1,8 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use crate::{FlashLoanProvider, FlashLoanProviderClient, LoanDetail};
+    use crate::{FlashLoanProvider, FlashLoanProviderClient};
     use soroban_sdk::{
-        symbol_short,
         testutils::Address as _,
         token::{Client as TokenClient, StellarAssetClient},
         Address, Env, Vec,
@@ -57,6 +56,42 @@ mod tests {
     }
     pub use mock_receiver_failure::MockReceiverFailure;
 
+    mod mock_receiver_reentrant {
+        use crate::FlashLoanProviderClient;
+        use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env};
+
+        #[contract]
+        pub struct MockReceiverReentrant;
+
+        #[contractimpl]
+        impl MockReceiverReentrant {
+            pub fn execute_loan(env: Env, _token: Address, _amount: i128, _fee: i128) {
+                let provider = env
+                    .storage()
+                    .instance()
+                    .get::<_, Address>(&symbol_short!("provider"))
+                    .unwrap();
+                let token = env
+                    .storage()
+                    .instance()
+                    .get::<_, Address>(&symbol_short!("token"))
+                    .unwrap();
+                let provider_client = FlashLoanProviderClient::new(&env, &provider);
+                provider_client.flash_loan(&env.current_contract_address(), &token, &1);
+            }
+
+            pub fn set_reentry_target(env: Env, provider: Address, token: Address) {
+                env.storage()
+                    .instance()
+                    .set(&symbol_short!("provider"), &provider);
+                env.storage()
+                    .instance()
+                    .set(&symbol_short!("token"), &token);
+            }
+        }
+    }
+    pub use mock_receiver_reentrant::{MockReceiverReentrant, MockReceiverReentrantClient};
+
     mod mock_batch_receiver_success {
         use crate::LoanDetail;
         use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, Vec};
@@ -106,6 +141,38 @@ mod tests {
         }
     }
     pub use mock_batch_receiver_failure::MockBatchReceiverFailure;
+
+    mod mock_batch_receiver_reentrant {
+        use crate::{FlashLoanProviderClient, LoanDetail};
+        use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
+
+        #[contract]
+        pub struct MockBatchReceiverReentrant;
+
+        #[contractimpl]
+        impl MockBatchReceiverReentrant {
+            pub fn execute_batch_loan(env: Env, loans: Vec<LoanDetail>) {
+                let provider = env
+                    .storage()
+                    .instance()
+                    .get::<_, Address>(&symbol_short!("provider"))
+                    .unwrap();
+                let token = loans.get(0).unwrap().token;
+                let provider_client = FlashLoanProviderClient::new(&env, &provider);
+                let reentrant_loans = soroban_sdk::vec![&env, (token, 1_i128)];
+                provider_client.flash_loan_batch(&env.current_contract_address(), &reentrant_loans);
+            }
+
+            pub fn set_provider(env: Env, provider: Address) {
+                env.storage()
+                    .instance()
+                    .set(&symbol_short!("provider"), &provider);
+            }
+        }
+    }
+    pub use mock_batch_receiver_reentrant::{
+        MockBatchReceiverReentrant, MockBatchReceiverReentrantClient,
+    };
 
     mod mock_batch_receiver_partial {
         use crate::LoanDetail;
@@ -237,6 +304,20 @@ mod tests {
         let env = Env::default();
         let (provider_id, token_id, _admin) = setup(&env);
         let receiver_id = env.register(MockReceiverFailure, ());
+        let provider_client = FlashLoanProviderClient::new(&env, &provider_id);
+        provider_client.flash_loan(&receiver_id, &token_id, &100_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Contract re-entry is not allowed")]
+    fn test_flash_loan_reentrancy_guard_blocks_nested_loan() {
+        let env = Env::default();
+        let receiver_id = env.register(MockReceiverReentrant, ());
+        let (provider_id, token_id, _admin) = setup_with_receiver(&env, &receiver_id);
+
+        let receiver_client = MockReceiverReentrantClient::new(&env, &receiver_id);
+        receiver_client.set_reentry_target(&provider_id, &token_id);
+
         let provider_client = FlashLoanProviderClient::new(&env, &provider_id);
         provider_client.flash_loan(&receiver_id, &token_id, &100_000);
     }
@@ -430,6 +511,22 @@ mod tests {
         let mut loans = Vec::new(&env);
         loans.push_back((token_ids.get(0).unwrap(), 100_000_i128));
         loans.push_back((token_ids.get(1).unwrap(), 50_000_i128));
+        provider_client.flash_loan_batch(&receiver_id, &loans);
+    }
+
+    #[test]
+    #[should_panic(expected = "Contract re-entry is not allowed")]
+    fn test_flash_loan_batch_reentrancy_guard_blocks_nested_batch() {
+        let env = Env::default();
+        let receiver_id = env.register(MockBatchReceiverReentrant, ());
+        let (provider_id, token_ids, _admin) =
+            setup_multiple_tokens_with_receiver(&env, 1, &receiver_id);
+
+        let receiver_client = MockBatchReceiverReentrantClient::new(&env, &receiver_id);
+        receiver_client.set_provider(&provider_id);
+
+        let provider_client = FlashLoanProviderClient::new(&env, &provider_id);
+        let loans = soroban_sdk::vec![&env, (token_ids.get(0).unwrap(), 100_000_i128)];
         provider_client.flash_loan_batch(&receiver_id, &loans);
     }
 

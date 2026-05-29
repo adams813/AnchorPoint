@@ -11,10 +11,11 @@
 //! - Maintain event log with timestamps and metadata
 //! - Query event history for indexers
 
+use anchorpointutils::events::{emit_event, AnchorEvent, CrossContractEvent};
 use soroban_sdk::{
-    bytes, contract, contractimpl, contracttype, symbol_short, vec, Address, Bytes, Env, String as SorobanString, Map, Vec,
+    contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Map,
+    String as SorobanString, Vec,
 };
-use utils::events::{emit_event, AnchorEvent, CrossContractEvent};
 
 const MAX_REGISTERED_CONTRACTS: usize = 100;
 
@@ -28,8 +29,8 @@ pub enum DataKey {
     RegisteredContracts,
     /// Event counter for generating unique event IDs
     EventCounter,
-    /// Event archive: log of all captured cross-contract events
-    EventLog,
+    /// Event archive entry keyed by event id.
+    EventLogEntry(u64),
 }
 
 // ── Contract Types ──────────────────────────────────────────────────────────
@@ -67,24 +68,15 @@ impl EventHub {
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage()
-            .instance()
-            .set(&DataKey::EventCounter, &0u64);
+        env.storage().instance().set(&DataKey::EventCounter, &0u64);
 
         let contracts: Map<Address, bool> = Map::new(&env);
         env.storage()
             .instance()
             .set(&DataKey::RegisteredContracts, &contracts);
 
-        let event_log: Vec<EventLogEntry> = Vec::new(&env);
-        env.storage()
-            .persistent()
-            .set(&DataKey::EventLog, &event_log);
-
-        env.events().publish(
-            (symbol_short!("hub"), symbol_short!("init")),
-            admin,
-        );
+        env.events()
+            .publish((symbol_short!("hub"), symbol_short!("init")), admin);
     }
 
     /// Register a new source contract with the Event Hub
@@ -117,10 +109,8 @@ impl EventHub {
             .instance()
             .set(&DataKey::RegisteredContracts, &contracts);
 
-        env.events().publish(
-            (symbol_short!("hub"), symbol_short!("reg")),
-            contract,
-        );
+        env.events()
+            .publish((symbol_short!("hub"), symbol_short!("reg")), contract);
     }
 
     /// Unregister a source contract
@@ -149,10 +139,8 @@ impl EventHub {
             .instance()
             .set(&DataKey::RegisteredContracts, &contracts);
 
-        env.events().publish(
-            (symbol_short!("hub"), symbol_short!("unreg")),
-            contract,
-        );
+        env.events()
+            .publish((symbol_short!("hub"), symbol_short!("unreg")), contract);
     }
 
     /// Check if a contract is registered
@@ -164,16 +152,7 @@ impl EventHub {
     /// # Returns
     /// `true` if the contract is registered, `false` otherwise
     pub fn is_registered(env: Env, contract: Address) -> bool {
-        let contracts: Map<Address, bool> = env
-            .storage()
-            .instance()
-            .get(&DataKey::RegisteredContracts)
-            .expect("hub not initialized");
-
-        contracts
-            .get(contract)
-            .map(|v| v)
-            .unwrap_or(false)
+        Self::is_registered_source(&env, &contract)
     }
 
     /// Capture and re-emit an event from a source contract
@@ -193,7 +172,7 @@ impl EventHub {
         event_data: Bytes,
     ) {
         // Verify source contract is registered
-        let is_registered = Self::is_registered(env.clone(), source_contract.clone());
+        let is_registered = Self::is_registered_source(&env, &source_contract);
         assert!(is_registered, "source contract not registered");
 
         // Get current timestamp
@@ -219,17 +198,9 @@ impl EventHub {
             event_data: event_data.clone(),
         };
 
-        // Add to event log
-        let mut event_log: Vec<EventLogEntry> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::EventLog)
-            .unwrap_or_else(|| Vec::new(&env));
-
-        event_log.push_back(log_entry);
         env.storage()
             .persistent()
-            .set(&DataKey::EventLog, &event_log);
+            .set(&DataKey::EventLogEntry(new_counter), &log_entry);
 
         // Create and emit cross-contract event
         let cross_contract_event = CrossContractEvent {
@@ -266,25 +237,24 @@ impl EventHub {
     /// # Returns
     /// A vector of EventLogEntry items
     pub fn get_events(env: Env, start_id: u64, limit: u32) -> Vec<EventLogEntry> {
-        let event_log: Vec<EventLogEntry> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::EventLog)
-            .unwrap_or_else(|| Vec::new(&env));
-
         let mut result = Vec::new(&env);
-        let limit = limit as usize;
-        let mut count = 0;
+        let counter = Self::get_event_count(env.clone());
+        let mut event_id = start_id;
 
-        for i in 0..event_log.len() {
-            if count >= limit {
+        while event_id <= counter && result.len() < limit {
+            if event_id == 0 {
+                event_id = 1;
+                continue;
+            }
+
+            if let Some(entry) = Self::get_event_entry(&env, event_id) {
+                result.push_back(entry);
+            }
+
+            if event_id == u64::MAX {
                 break;
             }
-            let entry = event_log.get(i).unwrap();
-            if entry.id >= start_id {
-                result.push_back(entry);
-                count += 1;
-            }
+            event_id += 1;
         }
 
         result
@@ -299,20 +269,7 @@ impl EventHub {
     /// # Returns
     /// The EventLogEntry if found, panics otherwise
     pub fn get_event(env: Env, event_id: u64) -> EventLogEntry {
-        let event_log: Vec<EventLogEntry> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::EventLog)
-            .unwrap_or_else(|| Vec::new(&env));
-
-        for i in 0..event_log.len() {
-            let entry = event_log.get(i).unwrap();
-            if entry.id == event_id {
-                return entry;
-            }
-        }
-
-        panic!("event not found");
+        Self::get_event_entry(&env, event_id).expect("event not found")
     }
 
     /// Get events from a specific source contract
@@ -329,25 +286,21 @@ impl EventHub {
         source_contract: Address,
         limit: u32,
     ) -> Vec<EventLogEntry> {
-        let event_log: Vec<EventLogEntry> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::EventLog)
-            .unwrap_or_else(|| Vec::new(&env));
-
         let mut result = Vec::new(&env);
-        let limit = limit as usize;
-        let mut count = 0;
+        let counter = Self::get_event_count(env.clone());
+        let mut event_id = 1u64;
 
-        for i in 0..event_log.len() {
-            if count >= limit {
+        while event_id <= counter && result.len() < limit {
+            if let Some(entry) = Self::get_event_entry(&env, event_id) {
+                if entry.source_contract == source_contract {
+                    result.push_back(entry);
+                }
+            }
+
+            if event_id == u64::MAX {
                 break;
             }
-            let entry = event_log.get(i).unwrap();
-            if entry.source_contract == source_contract {
-                result.push_back(entry);
-                count += 1;
-            }
+            event_id += 1;
         }
 
         result
@@ -367,14 +320,23 @@ impl EventHub {
             .get(&DataKey::RegisteredContracts)
             .expect("hub not initialized");
 
-        let mut result = Vec::new(&env);
-        for i in 0..contracts.len() {
-            if let Some(key) = contracts.key_by_index(i) {
-                result.push_back(key);
-            }
-        }
+        contracts.keys()
+    }
 
-        result
+    fn is_registered_source(env: &Env, contract: &Address) -> bool {
+        let contracts: Map<Address, bool> = env
+            .storage()
+            .instance()
+            .get(&DataKey::RegisteredContracts)
+            .expect("hub not initialized");
+
+        contracts.get(contract.clone()).unwrap_or(false)
+    }
+
+    fn get_event_entry(env: &Env, event_id: u64) -> Option<EventLogEntry> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::EventLogEntry(event_id))
     }
 }
 
@@ -386,6 +348,7 @@ mod tests {
     #[test]
     fn test_initialize() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register(EventHub, ());
         let client = EventHubClient::new(&env, &contract_id);
 
@@ -398,6 +361,7 @@ mod tests {
     #[test]
     fn test_register_contract() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register(EventHub, ());
         let client = EventHubClient::new(&env, &contract_id);
 
@@ -413,6 +377,7 @@ mod tests {
     #[test]
     fn test_capture_event() {
         let env = Env::default();
+        env.mock_all_auths();
         env.ledger().set_timestamp(1_000_000u64);
 
         let contract_id = env.register(EventHub, ());
@@ -424,14 +389,10 @@ mod tests {
         let source_contract = Address::generate(&env);
         client.register_contract(&admin, &source_contract);
 
-        let event_type = SorobanString::from_slice(&env, b"transfer");
+        let event_type = SorobanString::from_str(&env, "transfer");
         let event_data = Bytes::from_slice(&env, b"test_event_data");
 
-        client.capture_event(
-            &source_contract,
-            &event_type,
-            &event_data,
-        );
+        client.capture_event(&source_contract, &event_type, &event_data);
 
         assert_eq!(client.get_event_count(), 1);
 
@@ -447,6 +408,7 @@ mod tests {
     #[test]
     fn test_unregister_contract() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register(EventHub, ());
         let client = EventHubClient::new(&env, &contract_id);
 
@@ -464,6 +426,7 @@ mod tests {
     #[test]
     fn test_get_events_by_contract() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register(EventHub, ());
         let client = EventHubClient::new(&env, &contract_id);
 
@@ -476,7 +439,7 @@ mod tests {
         client.register_contract(&admin, &contract1);
         client.register_contract(&admin, &contract2);
 
-        let event_type = SorobanString::from_slice(&env, b"transfer");
+        let event_type = SorobanString::from_str(&env, "transfer");
         let event_data = Bytes::from_slice(&env, b"data");
 
         client.capture_event(&contract1, &event_type, &event_data);
