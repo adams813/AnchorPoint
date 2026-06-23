@@ -123,7 +123,6 @@ export const SEP24Flow = ({ type, uiConfig }: { type: 'deposit' | 'withdraw'; ui
                     key={asset}
                     role="listitem"
                     onClick={() => goToStep(isWithdraw ? 2 : 3)}
-                    aria-label={`Select ${asset} for ${flowLabel.toLowerCase()}`}
                     className="flex items-center justify-between rounded-xl border border-slate-500 bg-slate-900 p-4 transition-all hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-text"
                   >
                     <div className="flex items-center gap-3">
