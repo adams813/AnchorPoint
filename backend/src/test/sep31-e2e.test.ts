@@ -5,7 +5,12 @@ import prisma from '../lib/prisma';
 
 // Mock auth middleware for testing
 jest.mock('../api/middleware/auth.middleware', () => ({
-  authMiddleware: (req: any, res: any, next: any) => next(),
+  authMiddleware: (req: any, res: any, next: any) => {
+    req.user = {
+      publicKey: req.body?.account || req.query?.account || 'GB7KUA47QKRI6Q6X7C3HOC2HEP6VJQRQWQYQF66VJPHJRVMEDJOVML6K'
+    };
+    next();
+  },
   AuthRequest: {},
 }));
 
@@ -19,14 +24,27 @@ jest.mock('../api/middleware/rate-limit.middleware', () => ({
 }));
 
 describe('SEP-31 Cross-Border Payment E2E Flow', () => {
-  const clientPublicKey = 'GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGZWM9CQJURIXI5JLHY2QB';
+  const clientPublicKey = 'GB7KUA47QKRI6Q6X7C3HOC2HEP6VJQRQWQYQF66VJPHJRVMEDJOVML6K';
   let transactionId = '';
+  let callbackCount = 0;
 
   beforeAll(async () => {
     // Clean up any existing test data
     await prisma.transaction.deleteMany({ where: { type: 'SEP31' } });
     await prisma.kycCustomer.deleteMany();
     await prisma.user.deleteMany();
+
+    jest.spyOn(global, 'fetch').mockImplementation((url) => {
+      if (url.toString().includes('merchant.example.com')) {
+        callbackCount++;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ ok: true }),
+        } as any);
+      }
+      return Promise.reject(new Error(`Unmocked fetch to ${url}`));
+    });
   });
 
   afterAll(async () => {
@@ -141,11 +159,7 @@ describe('SEP-31 Cross-Border Payment E2E Flow', () => {
     });
 
     it('should update transaction status through the payment flow', async () => {
-      // Mock callback notifications
-      const callbackMock = nock('https://merchant.example.com')
-        .post('/sep31/callback')
-        .times(4)
-        .reply(200);
+      callbackCount = 0;
 
       // 1. pending_sender -> pending_stellar
       let res = await request(app)
@@ -181,8 +195,7 @@ describe('SEP-31 Cross-Border Payment E2E Flow', () => {
 
       expect(res.status).toBe(200);
 
-      // Verify all callbacks were sent
-      callbackMock.done();
+      expect(callbackCount).toBe(4);
     });
 
     it('should show completed transaction with settlement details', async () => {

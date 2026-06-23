@@ -16,6 +16,7 @@ import metricsRouter from './api/routes/metrics.route';
 import relayerRouter from './api/routes/relayer.route';
 import recurringPaymentsRouter from './api/routes/recurring-payments.route';
 import configRouter from './api/routes/config.route';
+import sep31Router from './api/routes/sep31.route';
 import { errorHandler } from './api/middleware/error.middleware';
 import { metricsMiddleware, connectionTracker } from './api/middleware/metrics.middleware';
 import configService from './services/config.service';
@@ -137,6 +138,7 @@ app.use('/sep40', sep40Router);
 app.use('/sep12', sep12Router);
 
 // Public endpoints — shared Redis-backed rate limit state
+app.use('/sep31', publicLimiter, sep31Router);
 app.use('/sep38', publicLimiter, sep38Router);
 app.use('/info', publicLimiter, infoRouter);
 app.use('/sep24', publicLimiter, sep24Router);

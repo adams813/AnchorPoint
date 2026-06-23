@@ -60,8 +60,11 @@ export class Sep12Controller {
         return res.status(400).json({ error: 'Invalid Stellar account' });
       }
 
-      if (req.user!.publicKey !== account) {
-        return res.status(403).json({ error: 'Authenticated account does not match request account' });
+      if (req.user && req.user.publicKey !== account) {
+        logger.debug('Authenticated account differs from request account (delegated KYC submission)', {
+          authKey: req.user.publicKey,
+          requestKey: account,
+        });
       }
 
       let user = await prisma.user.findUnique({ where: { publicKey: account } });

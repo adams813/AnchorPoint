@@ -5,7 +5,12 @@ import app from '../index';
 
 // Mock problematic services and middleware
 jest.mock('../api/middleware/auth.middleware', () => ({
-  authMiddleware: (req: any, res: any, next: any) => next(),
+  authMiddleware: (req: any, res: any, next: any) => {
+    req.user = {
+      publicKey: req.body?.account || req.query?.account || 'GB7KUA47QKRI6Q6X7C3HOC2HEP6VJQRQWQYQF66VJPHJRVMEDJOVML6K'
+    };
+    next();
+  },
   AuthRequest: {},
 }));
 
@@ -31,10 +36,25 @@ describe('AnchorPoint E2E Tests - Cross-Border Payment Flow', () => {
   let authToken = '';
   let quoteId = '';
   let sep31TransactionId = '';
+  let callbackCount = 0;
 
   beforeAll(() => {
     // Clean up any existing mocks
     nock.cleanAll();
+
+    const originalFetch = global.fetch;
+    jest.spyOn(global, 'fetch').mockImplementation((url, init) => {
+      const urlStr = url.toString();
+      if (urlStr.includes('example.com') || urlStr.includes('merchant.example.com')) {
+        callbackCount++;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ ok: true }),
+        } as any);
+      }
+      return originalFetch(url, init);
+    });
   });
 
   afterEach(() => {

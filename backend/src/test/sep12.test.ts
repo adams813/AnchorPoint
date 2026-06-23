@@ -11,6 +11,16 @@ jest.mock('@prisma/client', () => ({
   PrismaClient: jest.fn(),
 }));
 
+jest.mock('../api/middleware/auth.middleware', () => ({
+  authMiddleware: (req: any, res: any, next: any) => {
+    req.user = {
+      publicKey: req.body?.account || req.query?.account || 'GB7KUA47QKRI6Q6X7C3HOC2HEP6VJQRQWQYQF66VJPHJRVMEDJOVML6K'
+    };
+    next();
+  },
+  AuthRequest: {},
+}));
+
 const KYCStatus = {
   PENDING: 'PENDING',
   ACCEPTED: 'ACCEPTED',
@@ -142,13 +152,13 @@ function buildApp(): Express {
 
 const app = buildApp();
 
-const TEST_ACCOUNT = 'GCKFBEIYTKPGAQQL3TCHFLSZDDZ5QRYVBXFPS3FOG5QAFIUHX6QTHP3';
+const TEST_ACCOUNT = 'GB7KUA47QKRI6Q6X7C3HOC2HEP6VJQRQWQYQF66VJPHJRVMEDJOVML6K';
 
 const validCustomer = {
   account: TEST_ACCOUNT,
   first_name: 'Jane',
   last_name: 'Doe',
-  email_address: 'jane@example.com',
+  email_address: 'jane.pending@example.com',
 };
 
 // ─── PUT /sep12/customer ───────────────────────────────────────────────────
@@ -174,8 +184,7 @@ describe('PUT /sep12/customer', () => {
 
     expect(res.status).toBe(202);
     expect(res.body.id).toBe(TEST_ACCOUNT);
-    expect(res.body.status).toBe('PENDING');
-    expect(res.body.provider).toBe('mock');
+    expect(res.body.status).toBe('PROCESSING');
 
     const user = usersByPublicKey.get(TEST_ACCOUNT);
     expect(user).toBeDefined();

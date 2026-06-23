@@ -40,33 +40,60 @@ export const SEP24Flow = ({ type, uiConfig }: { type: 'deposit' | 'withdraw'; ui
 
       {/* Step indicator */}
       <nav
-        className="mb-8 flex justify-between"
+        className="mb-12 relative px-4"
         aria-label={`${flowLabel} progress`}
       >
-        <ol className="flex w-full justify-between list-none p-0 m-0">
-          {visibleSteps.map((s, idx) => (
-            <li key={s} className="flex items-center">
-              <div
-                className={`flex h-10 w-10 items-center justify-center rounded-full font-bold transition-all ${
-                  step >= s
-                    ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/20'
-                    : 'bg-slate-800 text-slate-500'
-                }`}
-                aria-label={`Step ${idx + 1} of ${totalSteps}: ${STEP_LABELS[s - 1]}${
-                  step === s ? ' (current)' : step > s ? ' (completed)' : ''
-                }`}
-                aria-current={step === s ? 'step' : undefined}
-              >
-                <span aria-hidden="true">{idx + 1}</span>
-              </div>
-              {idx < totalSteps - 1 && (
-                <div
-                  className={`mx-2 h-1 w-16 rounded bg-slate-800 transition-colors ${step > s ? 'bg-primary' : ''}`}
-                  aria-hidden="true"
-                />
-              )}
-            </li>
-          ))}
+        {/* Progress track background */}
+        <div className="absolute top-5 left-10 right-10 h-0.5 bg-slate-800 -translate-y-1/2 z-0" aria-hidden="true">
+          <div
+            className="h-full bg-gradient-to-r from-primary to-accent transition-all duration-500"
+            style={{ width: totalSteps > 1 ? `${((displayStep - 1) / (totalSteps - 1)) * 100}%` : '0%' }}
+          />
+        </div>
+
+        <ol className="relative z-10 flex justify-between list-none p-0 m-0 w-full">
+          {visibleSteps.map((s, idx) => {
+            const isCompleted = step > s;
+            const isActive = step === s;
+            const isFuture = step < s;
+            return (
+              <li key={s} className="flex flex-col items-center flex-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isFuture) {
+                      goToStep(s);
+                    }
+                  }}
+                  disabled={isFuture}
+                  className={`flex h-10 w-10 items-center justify-center rounded-full font-bold transition-all duration-300 relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
+                    isCompleted
+                      ? 'bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-lg shadow-primary/30 scale-105 hover:scale-110 cursor-pointer'
+                      : isActive
+                      ? 'bg-slate-900 border-2 border-primary text-primary shadow-lg shadow-primary/20 scale-110 ring-4 ring-primary/20 cursor-default'
+                      : 'bg-slate-950 border border-slate-800 text-slate-600 cursor-not-allowed'
+                  }`}
+                  aria-label={`Step ${idx + 1} of ${totalSteps}: ${STEP_LABELS[s - 1]}${
+                    isActive ? ' (current)' : isCompleted ? ' (completed)' : ''
+                  }`}
+                  aria-current={isActive ? 'step' : undefined}
+                >
+                  {isCompleted ? (
+                    <CheckCircle2 size={16} className="text-white" aria-hidden="true" />
+                  ) : (
+                    <span aria-hidden="true">{idx + 1}</span>
+                  )}
+                </button>
+                <span
+                  className={`mt-3 text-xs font-semibold tracking-wide transition-colors duration-300 text-center ${
+                    isActive ? 'text-primary' : isCompleted ? 'text-slate-300' : 'text-slate-500'
+                  }`}
+                >
+                  {STEP_LABELS[s - 1]}
+                </span>
+              </li>
+            );
+          })}
         </ol>
       </nav>
 

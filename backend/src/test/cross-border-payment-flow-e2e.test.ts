@@ -8,7 +8,12 @@ import app from '../index';
 
 // Make auth + rate limit pass through for this E2E suite.
 jest.mock('../api/middleware/auth.middleware', () => ({
-  authMiddleware: (req: any, res: any, next: any) => next(),
+  authMiddleware: (req: any, res: any, next: any) => {
+    req.user = {
+      publicKey: req.body?.account || req.query?.account || 'GB7KUA47QKRI6Q6X7C3HOC2HEP6VJQRQWQYQF66VJPHJRVMEDJOVML6K'
+    };
+    next();
+  },
   AuthRequest: {},
 }));
 
@@ -21,12 +26,13 @@ jest.mock('../api/middleware/rate-limit.middleware', () => ({
 }));
 
 describe('AnchorPoint E2E - Cross-border payment flow (KYC → SEP-38 quote → SEP-31 settlement)', () => {
-  const clientPublicKey = 'GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGZWM9CQJURIXI5JLHY2QB';
+  const clientPublicKey = 'GB7KUA47QKRI6Q6X7C3HOC2HEP6VJQRQWQYQF66VJPHJRVMEDJOVML6K';
   const receiverPublicKey = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 
   const authToken = 'mock-jwt-token-for-e2e-testing';
   let quoteId = '';
   let transactionId = '';
+  let callbackCount = 0;
 
   beforeAll(async () => {
     // Keep the DB deterministic per run.
@@ -34,6 +40,18 @@ describe('AnchorPoint E2E - Cross-border payment flow (KYC → SEP-38 quote → 
     await prisma.quote.deleteMany();
     await prisma.kycCustomer.deleteMany();
     await prisma.user.deleteMany();
+
+    jest.spyOn(global, 'fetch').mockImplementation((url) => {
+      if (url.toString().includes('merchant.example.com')) {
+        callbackCount++;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ ok: true }),
+        } as any);
+      }
+      return Promise.reject(new Error(`Unmocked fetch to ${url}`));
+    });
   });
 
   afterAll(async () => {
@@ -114,11 +132,7 @@ describe('AnchorPoint E2E - Cross-border payment flow (KYC → SEP-38 quote → 
   });
 
   it('SEP-31: creates transaction and completes settlement (status progression + callback)', async () => {
-    // Mock callback endpoint that SEP-31 service notifies.
-    const callbackMock = nock('https://merchant.example.com')
-      .post('/sep31/callback')
-      .times(4)
-      .reply(200, { ok: true });
+    callbackCount = 0;
 
     const txRes = await request(app)
       .post('/sep31/transactions')
@@ -142,6 +156,9 @@ describe('AnchorPoint E2E - Cross-border payment flow (KYC → SEP-38 quote → 
         quote_id: quoteId || undefined,
       });
 
+    if (txRes.status !== 201) {
+      console.log('TX RES ERROR BODY:', txRes.body);
+    }
     expect(txRes.status).toBe(201);
     expect(txRes.body).toHaveProperty('id');
     expect(txRes.body).toHaveProperty('stellar_account_id');
@@ -201,7 +218,7 @@ describe('AnchorPoint E2E - Cross-border payment flow (KYC → SEP-38 quote → 
     expect(final.body.transaction.amount_fee).toBe('5.00');
     expect(final.body.transaction.completed_at).toBeTruthy();
 
-    callbackMock.done();
+    expect(callbackCount).toBe(4);
   });
 
   it('Transaction history: includes completed transaction', async () => {

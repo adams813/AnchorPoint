@@ -33,8 +33,7 @@ const upload = multer({ storage: storage });
  *     summary: Upload customer information and documents
  *     tags: [SEP-12]
  */
-router.put('/customer', upload.any(), sep12Controller.putCustomer.bind(sep12Controller));
-router.put('/customer', authMiddleware, upload.any(), sep12Controller.putCustomer);
+router.put('/customer', authMiddleware, upload.any(), sep12Controller.putCustomer.bind(sep12Controller));
 
 /**
  * @swagger
