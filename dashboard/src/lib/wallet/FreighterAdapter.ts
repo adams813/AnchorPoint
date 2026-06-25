@@ -7,6 +7,7 @@ export class FreighterAdapter implements WalletAdapter {
 
   async isInstalled(): Promise<boolean> {
     // Check if the Freighter extension is injected
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return typeof window !== 'undefined' && !!(window as any).freighterApi;
   }
 
@@ -16,6 +17,7 @@ export class FreighterAdapter implements WalletAdapter {
       throw new Error('Freighter is not installed');
     }
     
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const api = (window as any).freighterApi;
     try {
       if (await api.isConnected()) {
@@ -41,6 +43,7 @@ export class FreighterAdapter implements WalletAdapter {
       throw new Error('Freighter is not installed');
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const api = (window as any).freighterApi;
     try {
       const signedXdr = await api.signTransaction(xdr, { network });
