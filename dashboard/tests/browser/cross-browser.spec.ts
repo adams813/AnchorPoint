@@ -2,7 +2,8 @@ import { expect, test } from '@playwright/test';
 
 test.describe('dashboard cross-browser smoke coverage', () => {
   test('renders the shell and recovers from backend config failure', async ({ page }) => {
-    await page.route('**/api/config/ui', async (route) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.route((url) => url.pathname.includes('/api/config/ui'), async (route) => {
       await route.fulfill({
         status: 500,
         contentType: 'application/json',
